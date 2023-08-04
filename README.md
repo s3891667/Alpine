@@ -1,10 +1,3 @@
-# COSC2759 Assignment 2
-
-## Student details
-
-- Full Name: Khoa Duc Dang Nguyen
-- Student ID: S3891667
-
 # Deployment Description
 ## Overview:
 According to the Alpine's team, they have completed with building foo_app Nodejs website application with PostgreSQL database backend using docker images. The application and the back-end are both deployed at patrmitacr.azurecr.io/assignment2app. 
