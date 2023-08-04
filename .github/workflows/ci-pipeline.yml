@@ -1,0 +1,178 @@
+name: Alpine Application CI Pipeline
+on:
+  push:
+    branches:
+      - feature/*
+  pull_request:
+    branches:
+      - feature/*
+
+jobs: 
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: use Node.js 18.x
+      uses: actions/setup-node@v3
+      with:
+        node-version: "18"
+    - name: Install dependencies for project
+      run: 
+        npm clean-install --prefix src
+    - name: Run Lintest
+      run: 
+        npm run test-lint --prefix src
+  
+  unit-test:
+    needs: lint-test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: use Node.js 18.x
+      uses: actions/setup-node@v3
+      with: 
+        node-version: "18"
+    - name: Install dependencies for the project
+      run:
+        npm clean-install --prefix src
+    - name: Run Unit test
+      run:
+        npm run test-unit --prefix src
+
+    - name: Validate coverage
+      uses: codecov/codecov-action@v3
+      with: 
+        directory: src/coverage/
+        file: coverage-final.json
+        fail_ci_if_error: true
+        flags: unittests
+        verbose: true
+        dry_run: true
+
+    - if: success() || failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: unit-test-${{ github.sha }}
+        path: src/junit.xml
+
+  integration-test:
+    needs: unit-test
+    services:
+      mongodb:
+        image: mongo:4.0
+        options: >-
+          --health-cmd mongo
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+        - 27017:27017
+        
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: use Node.js 18.x
+      uses: actions/setup-node@v3
+      with: 
+        node-version: "18"
+    - name: Install dependencies for the project
+      run:
+        npm clean-install --prefix src
+    - name: Run integration test
+      run: npm run test-integration --prefix src
+      env:
+        MONGO_URL: mongodb://localhost:27017
+        APP_PORT: 3000
+
+    - name: Validate coverage
+      uses: codecov/codecov-action@v3
+      with: 
+        directory: src/coverage/
+        file: coverage-final.json
+        fail_ci_if_error: true
+        flags: unittests
+        verbose: true
+        dry_run: true
+
+    - if: success() || failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: integration-test-${{ github.sha }}
+        path: src/junit.xml
+  
+  e2e-test:
+    needs: integration-test
+    services:
+      mongodb:
+        image: mongo:4.0
+        options: >-
+          --health-cmd mongo
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+        - 27017:27017
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: use Node.js 18.x
+      uses: actions/setup-node@v3
+      with: 
+        node-version: "18"
+    - name: Install dependencies for the project
+      run: |
+        cd src
+        npm clean-install
+        npx playwright install
+        npx playwright install-deps 
+    - name: Run e2e test
+      run: 
+        npm run test-e2e --prefix src
+      env:
+        MONGO_URL: mongodb://localhost:27017
+        APP_PORT: 3000
+    - if: success() || failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: playwright-${{ github.sha }}
+        path: src/playwright-report/index.html
+
+  sast:
+    needs: unit-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install NodeJsScan
+        run: |
+          sudo apt-get update
+          sudo apt-get install python3-pip
+          pip3 install nodejsscan
+      - name: Execute Node Scan
+        run: |
+          nodejsscan -d . -o sast-result.json
+      - run: exit $(cat sast-result.json | jq .total_count.sec)
+      - if: success() || failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: sast-${{ github.sha }}
+          path: sast-result.json
+
+  package:
+    needs: e2e-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: use Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+      - run: |
+          cd src
+          npm clean-install 
+          npm pack 
+      - uses: actions/upload-artifact@v3
+        with:
+          name: pack-${{ github.sha }}
+          path: src/notes-1.0.0.tgz
+
+
