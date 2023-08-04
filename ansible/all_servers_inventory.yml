@@ -1,0 +1,17 @@
+app_servers:
+  hosts:
+    app1:
+      ansible_host: 
+    app2: 
+      ansible_host: 
+
+db_servers:
+  hosts:
+    db1:
+      ansible_host: 
+
+# Look up the Ansible documentation to work out what this block does
+all_servers:
+  children:
+    app_servers:
+    db_servers:

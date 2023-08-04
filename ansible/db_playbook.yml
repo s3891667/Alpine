@@ -1,0 +1,31 @@
+---
+- name: Configure database server
+  hosts: db_servers
+  remote_user: ubuntu
+  become: yes # sudo
+
+#This will start a docker image for Database
+  tasks:
+  - name: Upload sql file 
+    copy: 
+      src: ../misc/snapshot-prod-data.sql
+      dest:  /home/ubuntu/
+
+  - name: Create & run database container
+    community.docker.docker_container:
+      name: "foo_db"
+      image: "postgres:14.7"
+      env:
+        POSTGRES_PASSWORD=devops
+        POSTGRES_USER=pete
+        POSTGRES_DB=foo
+      published_ports:
+        - "0.0.0.0:5432:5432"
+      volumes:
+        - "/home/ubuntu/snapshot-prod-data.sql:/docker-entrypoint-initdb.d/init.sql"
+  - name: Start foo_db container
+    become: true
+    command: sudo docker start foo_db
+
+
+

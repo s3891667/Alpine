@@ -1,0 +1,25 @@
+---
+- name: Configure app server
+  hosts: app_servers
+  remote_user: ubuntu
+  become: yes # sudo
+
+#This task will host the docker image on the foo_app
+  tasks:
+  - name: Run foo_app container
+    community.docker.docker_container:
+      name: "foo_app"
+      image: "patrmitacr.azurecr.io/assignment2app:1.0.0"
+      env:
+        PORT=3001
+        DB_HOSTNAME=
+        DB_PORT=5432
+        DB_USERNAME=pete
+        DB_PASSWORD=devops
+      published_ports:
+        - "0.0.0.0:80:3001"
+  - name: Start foo_app container
+    become: true
+    command: sudo docker start foo_app
+
+

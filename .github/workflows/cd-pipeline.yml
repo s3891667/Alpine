@@ -1,0 +1,149 @@
+name: Foo_app CD Pipeline
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      trigger_reasons:
+        description: "Trigger workflow with API"
+        default: "API"
+        required: False
+
+jobs: 
+  ansible-setup:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: "3.9"
+    - name: Install Ansible
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        pip3 install ansible
+
+  awsCli-setup:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: "3.9"
+    - name: Install aws Cli
+      run: |
+         pip install awscli
+         aws --version
+
+  artifacts-check:
+    needs: awsCli-setup
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up AWS credentials
+      run: |
+        aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }} 
+        aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws configure set aws_session_token ${{ secrets.AWS_SESSION_TOKEN }}
+        aws configure set default.region us-east-1
+
+    - name: Check artifact existence
+      run: |
+        if aws s3 ls s3://s3891667-state-bucket/terraform.tfstate | grep -q 'terraform.tfstate'; then
+        echo "Artifact found. Skip deploy process."
+        exit 1
+        else
+          echo "Artifact not found. Proceed with deploy process."
+        fi
+
+  terraform-deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: [awsCli-setup,artifacts-check]
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+
+    - name: Set up AWS credentials
+      run: |
+        aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }} 
+        aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws configure set aws_session_token ${{ secrets.AWS_SESSION_TOKEN }}
+        aws configure set default.region us-east-1
+
+    - name: setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.3.9
+        terraform_wrapper: false
+
+    - name: Add keys to workflow virutal machine
+      run: |
+         echo "${{ secrets.OWEN_SECRET_KEY }}" > id_rsa
+         echo "${{ secrets.OWEN_SECRET_KEY_PRIVATE }}" > id_rsa.pub
+         sudo mkdir -p /home/runner/.ssh/
+         sudo cp id_rsa /home/runner/.ssh/id_rsa
+         sudo cp id_rsa.pub /home/runner/.ssh/id_rsa.pub
+
+    - name: Deploy local backend and S3
+      run: |
+
+          terraform -chdir=misc/ init
+          terraform -chdir=misc/ plan 
+          terraform -chdir=misc/ apply -auto-approve
+
+    - name: Deploy aws components
+      run: |
+
+        terraform -chdir=infra/ init  
+        terraform -chdir=infra/ plan 
+        terraform -chdir=infra/ apply -var "path_to_ssh_public_key=${{ secrets.OWEN_SECRET_KEY }}" -auto-approve
+
+      
+  ansible-deploy:
+    needs: [terraform-deploy,ansible-setup]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: install Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.3.9
+          terraform_wrapper: false
+      - name: Set up AWS credentials
+        run: |
+          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }} 
+          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws configure set aws_session_token ${{ secrets.AWS_SESSION_TOKEN }}
+          aws configure set default.region us-east-1
+          
+      - name: writing IPs into playbook files
+        run: |
+          sh ipInsert.sh
+      - name: Get SSH access
+        uses: webfactory/ssh-agent@v0.5.2
+        with:
+          ssh-private-key: ${{ secrets.OWEN_SECRET_KEY_PRIVATE }}
+
+      - name: Install Docker for EC2 instances
+        run: |
+          ansible-playbook ./ansible/all_servers_playbook.yml -i ./ansible/all_servers_inventory.yml --ssh-extra-args="-o StrictHostKeyChecking=no"
+      - name: Deploy Docker image for database
+        run: |
+          ansible-playbook ./ansible/db_playbook.yml -i ./ansible/db_inventory.yml 
+      - name: Deploy Docker images for applications
+        run: |
+          ansible-playbook ./ansible/app_playbook.yml -i ./ansible/app_inventory.yml 
+      - if: success() || failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-tfstate-${{ github.sha }}
+          path: ./infra/.terraform.lock.hcl
+
